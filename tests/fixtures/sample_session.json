@@ -1,0 +1,21 @@
+{
+  "title": "Sample Coding Session",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Help me implement a binary search algorithm in Python"
+    },
+    {
+      "role": "assistant",
+      "content": "I'll help you implement a binary search algorithm. Here's a clean implementation:\n\n```python\ndef binary_search(arr, target):\n    left, right = 0, len(arr) - 1\n    \n    while left <= right:\n        mid = (left + right) // 2\n        \n        if arr[mid] == target:\n            return mid\n        elif arr[mid] < target:\n            left = mid + 1\n        else:\n            right = mid - 1\n    \n    return -1\n```\n\nThis implementation has O(log n) time complexity."
+    },
+    {
+      "role": "user",
+      "content": "Can you add some error handling?"
+    },
+    {
+      "role": "assistant",
+      "content": "Sure! Here's the updated version with error handling:\n\n```python\ndef binary_search(arr, target):\n    if not arr:\n        raise ValueError(\"Array cannot be empty\")\n    \n    if not all(arr[i] <= arr[i+1] for i in range(len(arr)-1)):\n        raise ValueError(\"Array must be sorted\")\n    \n    left, right = 0, len(arr) - 1\n    \n    while left <= right:\n        mid = (left + right) // 2\n        \n        if arr[mid] == target:\n            return mid\n        elif arr[mid] < target:\n            left = mid + 1\n        else:\n            right = mid - 1\n    \n    return -1\n```"
+    }
+  ]
+}

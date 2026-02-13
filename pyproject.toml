@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cb-memory"
+version = "0.1.0"
+description = "Coding memory system powered by Couchbase — stores and retrieves past AI coding conversations, decisions, bug fixes, and patterns via MCP"
+requires-python = ">=3.10"
+dependencies = [
+    "couchbase>=4.3.0",
+    "mcp[cli]>=1.0.0",
+    "openai>=1.0.0",
+    "ollama>=0.4.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "click>=8.0.0",
+    "python-ulid>=3.0.0",
+    "python-dotenv>=1.0.0",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[project.scripts]
+cb-memory = "cb_memory.cli.main:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cb_memory"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
