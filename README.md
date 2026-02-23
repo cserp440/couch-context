@@ -55,21 +55,34 @@ A coding memory system powered by Couchbase that stores all past AI coding conve
 pip install -e .
 ```
 
-### 2. Setup Couchbase
-
-Start Couchbase with Docker:
+### 2. Run Guided Installer (Factory + GitHub Copilot)
 
 ```bash
-docker run -d --name couchbase-memory \
-  -p 8091-8096:8091-8096 -p 11210:11210 \
-  couchbase:latest
+cb-memory install
 ```
 
-Then initialize the cluster via the web UI at `http://localhost:8091`:
+This wizard asks for:
+- IDE selection (`factory`, `copilot-vscode`, `copilot-jetbrains`, `claude-code`, `codex`)
+- Couchbase credentials
+- OpenAI key (optional) or Ollama fallback settings
+
+It can write `.env`, run bootstrap (`cb-memory init`), and generate IDE MCP config files.
+
+### 3. Setup Couchbase (Manual/Advanced)
+
+Run Couchbase Server locally (or use an existing remote cluster), then initialize the cluster via the web UI at `http://localhost:8091`:
 - Create an Administrator account
 - Configure cluster settings (default RAM quotas are fine)
 
-### 3. Configure Environment
+Optional one-command local bootstrap:
+
+```bash
+./scripts/bootstrap_macos.sh
+# or
+./scripts/bootstrap_linux.sh
+```
+
+### 4. Configure Environment
 
 Copy the example env file and add your credentials:
 
@@ -110,15 +123,20 @@ AUTO_IMPORT_CLAUDE_PATH=~/.claude/projects
 # Auto-import Codex chats when MCP server starts
 AUTO_IMPORT_CODEX_ON_START=true
 AUTO_IMPORT_CODEX_PATH=~/.codex
+
+# Also auto-import on query (with cooldown) so fresh chats are searchable
+AUTO_IMPORT_ON_QUERY=true
+AUTO_IMPORT_MIN_INTERVAL_SECONDS=45
 ```
 
 `AUTO_IMPORT_CLAUDE_ON_START=false` disables startup sync.
+`AUTO_IMPORT_ON_QUERY=false` disables query-time sync.
 
 Scope behavior notes:
 - `INCLUDE_ALL_PROJECTS_BY_DEFAULT=true` makes `memory_search`, `memory_kv_semantic_search`, and `memory_context_for_request` search all projects by default.
 - `DEFAULT_RELATED_PROJECTS` lets you keep scope limited to a known set of project IDs (cross-project) instead of global.
 
-### 4. Provision the Database
+### 5. Provision the Database
 
 ```bash
 cb-memory setup
@@ -131,7 +149,7 @@ This creates:
 - Vector search index (1536-dim for OpenAI, 768-dim for Ollama)
 - Full-text search index
 
-### 5. Configure MCP Client
+### 6. Configure MCP Client
 
 #### For Claude Code
 
@@ -179,7 +197,7 @@ Add to your `opencode.jsonc`:
 }
 ```
 
-### 6. Import Existing History (Optional)
+### 7. Import Existing History (Optional)
 
 Import from OpenCode:
 
@@ -277,12 +295,15 @@ in this project recently?
 ## CLI Commands
 
 ```bash
-# Setup database schema
+# One-shot bootstrap (Docker-free):
+# verifies Couchbase REST API, provisions schema, imports chats,
+# and keeps auto-sync enabled
+cb-memory init
+
+# Setup database schema only
 cb-memory setup
 
-# One-shot bootstrap for a new PC:
-# installs/starts Couchbase latest (Docker), initializes cluster,
-# provisions schema, imports Claude/Codex/OpenCode chats, keeps auto-sync enabled
+# Deprecated alias (still works, no Docker behavior)
 cb-memory replicate
 
 # Import from various sources
@@ -370,7 +391,7 @@ All documents include embeddings for semantic search.
 
 ### Connection errors
 
-- Verify Couchbase is running: `docker ps`
+- Verify Couchbase is running and reachable: `curl -sf http://127.0.0.1:8091/pools`
 - Check connection string in `.env`
 - Verify credentials in `.env`
 

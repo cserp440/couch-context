@@ -55,15 +55,15 @@ You can also explicitly request memory:
 ## Configuration
 
 **MCP Server**: `~/.claude/settings.json`
-**Database**: http://localhost:18091 (Administrator / password)
-**Docker Container**: `couchbase-memory-local`
+**Database**: http://localhost:8091 (Administrator / password)
+**Runtime**: Local Couchbase service (Docker no longer required)
 
 ## Verify It's Working
 
 Run this command to see your memory:
 ```bash
 curl -s -u Administrator:password -X POST \
-  http://localhost:18093/query/service \
+  http://localhost:8093/query/service \
   -d 'statement=SELECT source, COUNT(*) as cnt FROM `coding-memory`.conversations.sessions GROUP BY source' \
   | python3.11 -m json.tool
 ```
@@ -81,4 +81,4 @@ Should show:
 
 🎉 **You're all set!** Memory retrieval is now automatic in Claude Code and Codex.
 
-For detailed information, see: `MEMORY_SYSTEM_GUIDE.md`
+For detailed information, see: `SETUP_GUIDE.md` and `README.md`

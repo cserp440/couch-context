@@ -5,19 +5,12 @@ Complete step-by-step guide to get cb-memory running.
 ## Prerequisites
 
 - Python 3.10 or higher
-- Docker (for Couchbase)
+- Couchbase Server (local service or remote cluster)
 - OpenAI API key (optional, will use Ollama as fallback)
 
 ## Step 1: Start Couchbase
 
-### Using Docker (Recommended)
-
-```bash
-docker run -d --name couchbase-memory \
-  -p 8091-8096:8091-8096 \
-  -p 11210:11210 \
-  couchbase:latest
-```
+Install/start Couchbase Server locally (or use an existing remote cluster).
 
 ### Initialize Cluster
 
@@ -39,6 +32,16 @@ pip install -e .
 ```
 
 This installs the package in editable mode with all dependencies.
+
+### Easy Path (Recommended)
+
+Run the guided installer:
+
+```bash
+cb-memory install
+```
+
+It prompts for IDE selection (`factory`, `copilot-vscode`, `copilot-jetbrains`, `claude-code`, `codex`) and Couchbase credentials, then can write `.env`, run bootstrap, and configure IDE MCP files.
 
 ## Step 3: Configure Environment
 
@@ -106,17 +109,19 @@ ollama pull nomic-embed-text
 
 ## Step 4: Provision the Database
 
+Recommended one-command bootstrap:
+
+```bash
+cb-memory init
+```
+
+Schema-only provisioning:
+
 ```bash
 cb-memory setup
 ```
 
-For new PCs, you can run one command instead:
-
-```bash
-cb-memory replicate
-```
-
-This bootstraps Couchbase (Docker latest), initializes cluster, provisions schema, imports chats/tool history, and leaves startup auto-sync enabled.
+`cb-memory init` is Docker-free and performs: Couchbase reachability check, schema provisioning, chat/tool import, and optional embedding backfill.
 
 This creates:
 - Bucket: `coding-memory`
@@ -283,8 +288,8 @@ cb-memory stats
 
 ### "Connection refused" errors
 
-- Check Couchbase is running: `docker ps | grep couchbase`
-- Restart Couchbase: `docker restart couchbase-memory`
+- Check Couchbase service status on your host
+- Verify REST endpoint: `curl -sf http://127.0.0.1:8091/pools`
 - Wait 30 seconds for Couchbase to be ready
 
 ### "Authentication failed"
@@ -363,7 +368,7 @@ If you encounter issues:
 
 1. Check the troubleshooting section above
 2. Run commands with `-v` for verbose output: `cb-memory -v setup`
-3. Check Couchbase logs: `docker logs couchbase-memory`
+3. Check Couchbase service logs on your host
 4. Open an issue on GitHub with error details
 
 Enjoy your persistent coding memory! 🧠

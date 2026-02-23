@@ -22,6 +22,30 @@ class _Db:
         self.cluster = _Cluster()
 
 
+class _ClusterWithRows:
+    def __init__(self):
+        self.queries: list[str] = []
+
+    def query(self, q, **kwargs):
+        self.queries.append(q)
+        if ".conversations.messages" in q:
+            return [
+                {
+                    "id": "msg::1",
+                    "text_content": "matrix_lr_update_mode=legacy was used in run_oldctrl_hyper_tune_vs_baseline.py",
+                    "tool_calls": [],
+                    "tool_results": [],
+                }
+            ]
+        return []
+
+
+class _DbWithRows:
+    def __init__(self):
+        self._settings = _Settings()
+        self.cluster = _ClusterWithRows()
+
+
 def test_kv_grep_uses_non_conflicting_any_variable_for_thoughts():
     db = _Db()
     _kv_grep(db, terms=["context", "codex"], project_ids=["/tmp/project"], per_collection_limit=2)
@@ -33,3 +57,19 @@ def test_kv_grep_uses_non_conflicting_any_variable_for_thoughts():
     messages_query = next(q for q in db.cluster.queries if ".conversations.messages" in q)
     assert "TOSTRING(m.tool_calls)" in messages_query
     assert "TOSTRING(m.tool_results)" in messages_query
+
+
+def test_kv_grep_assigns_high_score_to_exact_keyword_hits():
+    db = _DbWithRows()
+    out = _kv_grep(
+        db,
+        terms=["matrix_lr_update_mode=legacy", "run_oldctrl_hyper_tune_vs_baseline.py"],
+        project_ids=["/tmp/project"],
+        per_collection_limit=5,
+    )
+
+    assert len(out) == 1
+    row = out[0]
+    assert row["source"] == "kv"
+    assert row["score"] >= 11.0
+    assert "matrix_lr_update_mode=legacy" in row["_matched_terms"]

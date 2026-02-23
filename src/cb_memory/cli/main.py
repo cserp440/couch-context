@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
-import subprocess
 import time
 from pathlib import Path
 
 import click
 
+from cb_memory.cli.installer import (
+    SUPPORTED_IDES,
+    build_server_env,
+    install_ide_configs,
+    parse_ide_selection,
+    write_env_file,
+)
 from cb_memory.config import get_settings
 from cb_memory.db import SCOPES, CouchbaseClient
 from cb_memory.project import normalize_project_path
@@ -85,48 +92,51 @@ def _provision_schema(settings, bucket_ram: int) -> None:
     db.close()
 
 
-@cli.command("replicate")
-@click.option("--container-name", default="couchbase-memory", show_default=True, help="Docker container name")
-@click.option("--image", default="couchbase:latest", show_default=True, help="Couchbase Docker image")
+@cli.command("init")
 @click.option("--bucket-ram", default=256, show_default=True, help="Bucket RAM quota in MB")
-@click.option("--cluster-ram", default=1024, show_default=True, help="Cluster data service RAM in MB")
-@click.option("--index-ram", default=256, show_default=True, help="Cluster index service RAM in MB")
-@click.option("--fts-ram", default=256, show_default=True, help="Cluster search service RAM in MB")
+@click.option("--wait-timeout", default=180, show_default=True, help="Seconds to wait for Couchbase REST API")
 @click.option("--skip-claude", is_flag=True, help="Skip Claude chat import")
 @click.option("--skip-codex", is_flag=True, help="Skip Codex chat import")
 @click.option("--skip-opencode", is_flag=True, help="Skip OpenCode chat import")
 @click.option("--backfill-embeddings", is_flag=True, help="Backfill embeddings after import")
 @click.option("--project-id", default=None, help="Override project ID for imported data")
-def replicate_cmd(
-    container_name: str,
-    image: str,
+def init_cmd(
     bucket_ram: int,
-    cluster_ram: int,
-    index_ram: int,
-    fts_ram: int,
+    wait_timeout: int,
     skip_claude: bool,
     skip_codex: bool,
     skip_opencode: bool,
     backfill_embeddings: bool,
     project_id: str | None,
 ) -> None:
-    """One-shot bootstrap for new PCs: Couchbase + schema + chat sync."""
+    """Bootstrap local/remote Couchbase + schema + chat sync without Docker."""
+    _run_init(
+        bucket_ram=bucket_ram,
+        wait_timeout=wait_timeout,
+        skip_claude=skip_claude,
+        skip_codex=skip_codex,
+        skip_opencode=skip_opencode,
+        backfill_embeddings=backfill_embeddings,
+        project_id=project_id,
+    )
+
+
+def _run_init(
+    *,
+    bucket_ram: int,
+    wait_timeout: int,
+    skip_claude: bool,
+    skip_codex: bool,
+    skip_opencode: bool,
+    backfill_embeddings: bool,
+    project_id: str | None,
+) -> None:
     settings = get_settings()
     sync_project_id = project_id or settings.current_project_id or settings.default_project_id
 
-    click.echo("Step 1/4: Ensuring Docker + Couchbase latest container ...")
-    _ensure_docker_available()
-    _ensure_couchbase_container(container_name=container_name, image=image)
-    _wait_for_couchbase_rest(timeout_seconds=180)
-    _cluster_init_if_needed(
-        container_name=container_name,
-        username=settings.cb_username,
-        password=settings.cb_password,
-        cluster_ram=cluster_ram,
-        index_ram=index_ram,
-        fts_ram=fts_ram,
-    )
-
+    host = _extract_rest_host(settings.cb_connection_string)
+    click.echo(f"Step 1/4: Checking Couchbase REST API at http://{host}:8091 ...")
+    _wait_for_couchbase_rest(host=host, timeout_seconds=wait_timeout)
     click.echo("Step 2/4: Provisioning Couchbase schema ...")
     _provision_schema(settings, bucket_ram)
 
@@ -159,8 +169,7 @@ def replicate_cmd(
     click.echo(
         json.dumps(
             {
-                "container": container_name,
-                "image": image,
+                "cb_connection_string": settings.cb_connection_string,
                 "project_id": sync_project_id,
                 "imports": import_stats,
                 "auto_import_claude_on_start": settings.auto_import_claude_on_start,
@@ -169,6 +178,182 @@ def replicate_cmd(
             indent=2,
         )
     )
+
+
+@cli.command("replicate")
+@click.option("--container-name", default="couchbase-memory", show_default=True, help="Deprecated; ignored")
+@click.option("--image", default="couchbase:latest", show_default=True, help="Deprecated; ignored")
+@click.option("--bucket-ram", default=256, show_default=True, help="Bucket RAM quota in MB")
+@click.option("--cluster-ram", default=1024, show_default=True, help="Deprecated; ignored")
+@click.option("--index-ram", default=256, show_default=True, help="Deprecated; ignored")
+@click.option("--fts-ram", default=256, show_default=True, help="Deprecated; ignored")
+@click.option("--wait-timeout", default=180, show_default=True, help="Seconds to wait for Couchbase REST API")
+@click.option("--skip-claude", is_flag=True, help="Skip Claude chat import")
+@click.option("--skip-codex", is_flag=True, help="Skip Codex chat import")
+@click.option("--skip-opencode", is_flag=True, help="Skip OpenCode chat import")
+@click.option("--backfill-embeddings", is_flag=True, help="Backfill embeddings after import")
+@click.option("--project-id", default=None, help="Override project ID for imported data")
+def replicate_cmd(
+    container_name: str,
+    image: str,
+    bucket_ram: int,
+    cluster_ram: int,
+    index_ram: int,
+    fts_ram: int,
+    wait_timeout: int,
+    skip_claude: bool,
+    skip_codex: bool,
+    skip_opencode: bool,
+    backfill_embeddings: bool,
+    project_id: str | None,
+) -> None:
+    """Deprecated alias for `cb-memory init`."""
+    click.echo("Warning: `cb-memory replicate` is deprecated and no longer uses Docker.")
+    ignored = {
+        "container_name": container_name,
+        "image": image,
+        "cluster_ram": cluster_ram,
+        "index_ram": index_ram,
+        "fts_ram": fts_ram,
+    }
+    click.echo(f"Ignoring deprecated options: {json.dumps(ignored)}")
+    _run_init(
+        bucket_ram=bucket_ram,
+        wait_timeout=wait_timeout,
+        skip_claude=skip_claude,
+        skip_codex=skip_codex,
+        skip_opencode=skip_opencode,
+        backfill_embeddings=backfill_embeddings,
+        project_id=project_id,
+    )
+
+
+@cli.command("install")
+@click.option("--ide", "ide_values", multiple=True, type=click.Choice(list(SUPPORTED_IDES.keys())), help="IDE to configure")
+@click.option("--non-interactive", is_flag=True, help="Disable prompts and require all needed flags")
+@click.option("--cb-connection-string", default=None, help="Couchbase connection string")
+@click.option("--cb-username", default=None, help="Couchbase username")
+@click.option("--cb-password", default=None, help="Couchbase password")
+@click.option("--cb-bucket", default=None, help="Couchbase bucket name")
+@click.option("--openai-api-key", default=None, help="OpenAI API key (optional)")
+@click.option("--ollama-host", default=None, help="Ollama host URL")
+@click.option("--ollama-embedding-model", default=None, help="Ollama embedding model")
+@click.option("--project-id", default=None, help="Project id / workspace path")
+@click.option("--write-env/--no-write-env", default=True, show_default=True, help="Write collected settings to .env")
+@click.option("--bootstrap/--no-bootstrap", default=True, show_default=True, help="Run bootstrap (schema + import)")
+@click.option("--dry-run", is_flag=True, help="Show changes without writing files or running bootstrap")
+@click.pass_context
+def install_cmd(
+    ctx: click.Context,
+    ide_values: tuple[str, ...],
+    non_interactive: bool,
+    cb_connection_string: str | None,
+    cb_username: str | None,
+    cb_password: str | None,
+    cb_bucket: str | None,
+    openai_api_key: str | None,
+    ollama_host: str | None,
+    ollama_embedding_model: str | None,
+    project_id: str | None,
+    write_env: bool,
+    bootstrap: bool,
+    dry_run: bool,
+) -> None:
+    """Interactive installer for IDE MCP wiring + Couchbase credentials."""
+    settings = get_settings()
+    project_root = Path.cwd().resolve()
+
+    selected_ides = list(ide_values)
+    if not selected_ides and not non_interactive:
+        click.echo("Select IDE(s) to configure:")
+        for idx, (ide_id, label) in enumerate(SUPPORTED_IDES.items(), start=1):
+            click.echo(f"  {idx}. {label} ({ide_id})")
+        raw = click.prompt("Enter comma-separated ids or numbers", default="factory,copilot-vscode,claude-code,codex")
+        selected_ides = parse_ide_selection(raw)
+
+    if not selected_ides:
+        raise click.ClickException("No IDE selected. Use --ide or interactive selection.")
+
+    connection = cb_connection_string or settings.cb_connection_string
+    username = cb_username or settings.cb_username
+    password = cb_password or settings.cb_password
+    bucket = cb_bucket or settings.cb_bucket
+    workspace = project_id or settings.current_project_id or str(project_root)
+    ollama_host_value = ollama_host or settings.ollama_host
+    ollama_model_value = ollama_embedding_model or settings.ollama_embedding_model
+    openai_key_value = openai_api_key if openai_api_key is not None else settings.openai_api_key
+
+    if not non_interactive:
+        connection = click.prompt("Couchbase connection string", default=connection)
+        username = click.prompt("Couchbase username", default=username)
+        password = click.prompt("Couchbase password", default=password, hide_input=True)
+        bucket = click.prompt("Couchbase bucket", default=bucket)
+        workspace = click.prompt("Project id / workspace path", default=workspace)
+        current_openai = openai_key_value or ""
+        openai_key_value = (
+            click.prompt(
+                "OpenAI API key (optional, leave blank to use Ollama)",
+                default=current_openai,
+                show_default=False,
+            ).strip()
+            or None
+        )
+        if not openai_key_value:
+            ollama_host_value = click.prompt("Ollama host", default=ollama_host_value)
+            ollama_model_value = click.prompt("Ollama embedding model", default=ollama_model_value)
+
+    server_env = build_server_env(
+        cb_connection_string=connection,
+        cb_username=username,
+        cb_password=password,
+        cb_bucket=bucket,
+        project_id=workspace,
+        openai_api_key=openai_key_value,
+        ollama_host=ollama_host_value,
+        ollama_embedding_model=ollama_model_value,
+    )
+
+    if write_env:
+        env_changed = write_env_file(
+            env_path=project_root / ".env",
+            values=server_env,
+            dry_run=dry_run,
+        )
+        suffix = "(dry-run)" if dry_run else ""
+        click.echo(f".env {'would be updated' if env_changed else 'already up to date'} {suffix}".strip())
+
+    if bootstrap:
+        click.echo("Running bootstrap flow (init command) ...")
+        if dry_run:
+            click.echo("Dry run: skipped bootstrap execution.")
+        else:
+            ctx.invoke(
+                init_cmd,
+                bucket_ram=256,
+                wait_timeout=180,
+                skip_claude=False,
+                skip_codex=False,
+                skip_opencode=False,
+                backfill_embeddings=False,
+                project_id=workspace,
+            )
+
+    results = install_ide_configs(
+        ide_ids=selected_ides,
+        project_root=project_root,
+        env=server_env,
+        dry_run=dry_run,
+    )
+
+    click.echo("IDE configuration summary:")
+    for res in results:
+        label = SUPPORTED_IDES.get(res.ide, res.ide)
+        status = "updated" if res.changed else "already up to date"
+        if dry_run and res.changed:
+            status = "would be updated"
+        click.echo(f"  - {label}: {status} ({res.path})")
+
+    click.echo("Done. Restart the selected IDE(s) so MCP tools are loaded.")
 
 
 def _ensure_bucket(bm, name: str, ram_mb: int) -> None:
@@ -350,114 +535,77 @@ def _create_search_index(db: CouchbaseClient, settings) -> None:
                 click.echo(f"  Search index '{index_name}' created/updated.")
             elif resp.status_code == 400 and "same name" in resp.text.lower():
                 click.echo(f"  Search index '{index_name}' already exists.")
+            elif resp.status_code == 400 and "vector typed fields not supported" in resp.text.lower():
+                click.echo(
+                    f"  Search index '{index_name}' vector fields unsupported; "
+                    "retrying with text-only mapping."
+                )
+                text_only = _strip_vector_fields(index_def)
+                resp2 = requests.put(
+                    url,
+                    json=text_only,
+                    auth=(settings.cb_username, settings.cb_password),
+                    headers={"Content-Type": "application/json"},
+                )
+                if resp2.status_code in (200, 201):
+                    click.echo(f"  Search index '{index_name}' created/updated (text-only).")
+                elif resp2.status_code == 400 and "same name" in resp2.text.lower():
+                    click.echo(f"  Search index '{index_name}' already exists.")
+                else:
+                    click.echo(
+                        f"  Search index '{index_name}' fallback response "
+                        f"({resp2.status_code}): {resp2.text[:200]}"
+                    )
             else:
                 click.echo(f"  Search index '{index_name}' response ({resp.status_code}): {resp.text[:200]}")
         except Exception as e:
             click.echo(f"  Could not create search index '{index_name}' via REST: {e}")
 
 
-def _ensure_docker_available() -> None:
-    try:
-        subprocess.run(["docker", "--version"], check=True, capture_output=True, text=True)
-    except Exception as e:
-        raise click.ClickException(f"Docker is required but not available: {e}")
+def _strip_vector_fields(index_def: dict) -> dict:
+    """Return a copy of an index definition without vector fields.
 
-
-def _ensure_couchbase_container(container_name: str, image: str) -> None:
-    inspect = subprocess.run(
-        ["docker", "ps", "-a", "--filter", f"name=^/{container_name}$", "--format", "{{.Names}}"],
-        check=True,
-        capture_output=True,
-        text=True,
+    Couchbase Community Edition deployments may reject vector typed mappings.
+    """
+    result = copy.deepcopy(index_def)
+    types = (
+        result
+        .get("params", {})
+        .get("mapping", {})
+        .get("types", {})
     )
-    exists = container_name in inspect.stdout.splitlines()
-
-    if not exists:
-        click.echo(f"  Pulling image {image} ...")
-        subprocess.run(["docker", "pull", image], check=True)
-        click.echo(f"  Creating container {container_name} ...")
-        subprocess.run(
-            [
-                "docker",
-                "run",
-                "-d",
-                "--name",
-                container_name,
-                "-p",
-                "8091-8096:8091-8096",
-                "-p",
-                "11210:11210",
-                image,
-            ],
-            check=True,
-        )
-        return
-
-    running = subprocess.run(
-        ["docker", "ps", "--filter", f"name=^/{container_name}$", "--format", "{{.Names}}"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    if container_name not in running.stdout.splitlines():
-        click.echo(f"  Starting existing container {container_name} ...")
-        subprocess.run(["docker", "start", container_name], check=True)
+    for type_mapping in types.values():
+        props = type_mapping.get("properties")
+        if not isinstance(props, dict):
+            continue
+        props.pop("embedding", None)
+    return result
 
 
-def _wait_for_couchbase_rest(timeout_seconds: int = 180) -> None:
+def _extract_rest_host(connection_string: str) -> str:
+    host = connection_string.replace("couchbase://", "").replace("couchbases://", "")
+    host = host.split(",")[0].strip()
+    if not host:
+        return "127.0.0.1"
+    if ":" in host:
+        return host.split(":")[0]
+    return host
+
+
+def _wait_for_couchbase_rest(host: str, timeout_seconds: int = 180) -> None:
     import requests
 
+    url = f"http://{host}:8091/pools"
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         try:
-            resp = requests.get("http://127.0.0.1:8091/pools", timeout=2)
+            resp = requests.get(url, timeout=2)
             if resp.status_code in (200, 401):
                 return
         except Exception:
             pass
         time.sleep(2)
-    raise click.ClickException("Timed out waiting for Couchbase REST API on http://127.0.0.1:8091")
-
-
-def _cluster_init_if_needed(
-    container_name: str,
-    username: str,
-    password: str,
-    cluster_ram: int,
-    index_ram: int,
-    fts_ram: int,
-) -> None:
-    cmd = [
-        "docker",
-        "exec",
-        container_name,
-        "couchbase-cli",
-        "cluster-init",
-        "-c",
-        "127.0.0.1",
-        "--cluster-username",
-        username,
-        "--cluster-password",
-        password,
-        "--services",
-        "data,index,query,search",
-        "--cluster-ramsize",
-        str(cluster_ram),
-        "--cluster-index-ramsize",
-        str(index_ram),
-        "--cluster-fts-ramsize",
-        str(fts_ram),
-    ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode == 0:
-        click.echo("  Couchbase cluster initialized.")
-        return
-
-    combined = f"{proc.stdout}\n{proc.stderr}".lower()
-    if "already initialized" in combined or "cluster is initialized" in combined:
-        click.echo("  Couchbase cluster already initialized.")
-        return
-    raise click.ClickException(f"Cluster initialization failed:\n{proc.stdout}\n{proc.stderr}")
+    raise click.ClickException(f"Timed out waiting for Couchbase REST API on {url}")
 
 
 # ---------------------------------------------------------------------------

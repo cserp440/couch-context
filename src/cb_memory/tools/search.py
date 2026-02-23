@@ -239,11 +239,7 @@ def _kv_grep(
     q += f"LIMIT {int(per_collection_limit)}"
     try:
         rows = list(db.cluster.query(q, terms=terms, project_ids=project_ids))
-        for r in rows:
-            r.pop("embedding", None)
-            r["_scope"] = "conversations"
-            r["_collection"] = "messages"
-        results.extend(rows)
+        results.extend(_annotate_kv_rows(rows, terms, "conversations", "messages"))
     except Exception as e:
         logger.warning(f"KV search messages failed: {e}")
 
@@ -258,11 +254,7 @@ def _kv_grep(
     q += f"LIMIT {int(per_collection_limit)}"
     try:
         rows = list(db.cluster.query(q, terms=terms, project_ids=project_ids))
-        for r in rows:
-            r.pop("embedding", None)
-            r["_scope"] = "conversations"
-            r["_collection"] = "sessions"
-        results.extend(rows)
+        results.extend(_annotate_kv_rows(rows, terms, "conversations", "sessions"))
     except Exception as e:
         logger.warning(f"KV search sessions failed: {e}")
 
@@ -277,11 +269,7 @@ def _kv_grep(
     q += f"LIMIT {int(per_collection_limit)}"
     try:
         rows = list(db.cluster.query(q, terms=terms, project_ids=project_ids))
-        for r in rows:
-            r.pop("embedding", None)
-            r["_scope"] = "knowledge"
-            r["_collection"] = "decisions"
-        results.extend(rows)
+        results.extend(_annotate_kv_rows(rows, terms, "knowledge", "decisions"))
     except Exception as e:
         logger.warning(f"KV search decisions failed: {e}")
 
@@ -296,11 +284,7 @@ def _kv_grep(
     q += f"LIMIT {int(per_collection_limit)}"
     try:
         rows = list(db.cluster.query(q, terms=terms, project_ids=project_ids))
-        for r in rows:
-            r.pop("embedding", None)
-            r["_scope"] = "knowledge"
-            r["_collection"] = "bugs"
-        results.extend(rows)
+        results.extend(_annotate_kv_rows(rows, terms, "knowledge", "bugs"))
     except Exception as e:
         logger.warning(f"KV search bugs failed: {e}")
 
@@ -315,11 +299,7 @@ def _kv_grep(
     q += f"LIMIT {int(per_collection_limit)}"
     try:
         rows = list(db.cluster.query(q, terms=terms, project_ids=project_ids))
-        for r in rows:
-            r.pop("embedding", None)
-            r["_scope"] = "knowledge"
-            r["_collection"] = "patterns"
-        results.extend(rows)
+        results.extend(_annotate_kv_rows(rows, terms, "knowledge", "patterns"))
     except Exception as e:
         logger.warning(f"KV search patterns failed: {e}")
 
@@ -334,15 +314,55 @@ def _kv_grep(
     q += f"LIMIT {int(per_collection_limit)}"
     try:
         rows = list(db.cluster.query(q, terms=terms, project_ids=project_ids))
-        for r in rows:
-            r.pop("embedding", None)
-            r["_scope"] = "knowledge"
-            r["_collection"] = "thoughts"
-        results.extend(rows)
+        results.extend(_annotate_kv_rows(rows, terms, "knowledge", "thoughts"))
     except Exception as e:
         logger.warning(f"KV search thoughts failed: {e}")
 
     return results
+
+
+def _annotate_kv_rows(
+    rows: list[dict],
+    terms: list[str],
+    scope: str,
+    collection: str,
+) -> list[dict]:
+    out: list[dict] = []
+    for row in rows:
+        row.pop("embedding", None)
+        matched_terms = _matched_terms(row, terms)
+        # Keep exact keyword hits ahead of semantic-only matches.
+        row["score"] = 10.0 + float(len(matched_terms))
+        row["source"] = "kv"
+        row["_matched_terms"] = matched_terms
+        row["_scope"] = scope
+        row["_collection"] = collection
+        out.append(row)
+    return out
+
+
+def _matched_terms(row: dict, terms: list[str]) -> list[str]:
+    lowered_terms = [t.lower() for t in terms if t and t.strip()]
+    if not lowered_terms:
+        return []
+
+    fields = [
+        row.get("text_content"),
+        row.get("title"),
+        row.get("summary"),
+        row.get("description"),
+        row.get("context"),
+        row.get("root_cause"),
+        row.get("fix_description"),
+        row.get("code_example"),
+        row.get("content"),
+        row.get("tool_calls"),
+        row.get("tool_results"),
+    ]
+    haystack = " ".join(str(v) for v in fields if v is not None).lower()
+    if not haystack:
+        return []
+    return [t for t in lowered_terms if t in haystack]
 
 
 def _dedupe_results(results: list[dict]) -> list[dict]:

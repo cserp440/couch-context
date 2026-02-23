@@ -11,7 +11,7 @@ from mcp.types import Tool, TextContent
 from cb_memory.config import get_settings
 from cb_memory.db import CouchbaseClient
 from cb_memory.embeddings import get_embedding_provider
-from cb_memory.sync import auto_sync_claude, auto_sync_codex
+from cb_memory.sync import auto_sync_claude, auto_sync_codex, maybe_auto_sync_recent
 from cb_memory.tools import context, recall, save, search, sessions
 
 import sys
@@ -26,6 +26,17 @@ provider = get_embedding_provider(settings)
 
 # Create MCP server
 app = Server("cb-memory")
+
+QUERY_TOOLS = {
+    "memory_search",
+    "memory_kv_semantic_search",
+    "memory_recall_decision",
+    "memory_recall_bug",
+    "memory_list_sessions",
+    "memory_get_session",
+    "memory_project_context",
+    "memory_context_for_request",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +327,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     result = None
 
     try:
+        if name in QUERY_TOOLS:
+            requested_project_id = arguments.get("project_id") if isinstance(arguments, dict) else None
+            sync_status = maybe_auto_sync_recent(
+                db=db,
+                settings=settings,
+                project_id=requested_project_id or getattr(settings, "current_project_id", None),
+            )
+            logger.info(f"Query-time sync status: {sync_status.get('status')}")
+
         # Search & Recall
         if name == "memory_search":
             result = await search.memory_search(db, provider, **arguments)

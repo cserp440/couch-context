@@ -33,12 +33,14 @@ class Settings(BaseSettings):
     # General
     default_project_id: str = Field(default="default")
     current_project_id: str | None = Field(default_factory=lambda: str(Path.cwd().resolve()))
-    include_all_projects_by_default: bool = Field(default=False)
+    include_all_projects_by_default: bool = Field(default=True)
     default_related_projects: str = Field(default="")
     auto_import_claude_on_start: bool = Field(default=True)
     auto_import_claude_path: str = Field(default_factory=lambda: str(Path.home() / ".claude/projects"))
     auto_import_codex_on_start: bool = Field(default=True)
     auto_import_codex_path: str = Field(default_factory=lambda: str(Path.home() / ".codex"))
+    auto_import_on_query: bool = Field(default=True)
+    auto_import_min_interval_seconds: int = Field(default=45)
 
     model_config = {"env_prefix": "", "case_sensitive": False}
 
