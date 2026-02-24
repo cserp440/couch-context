@@ -60,11 +60,15 @@ A coding memory system powered by Couchbase that stores all past AI coding conve
 
 **macOS:**
 ```bash
+git clone https://github.com/cserp440/couch-context.git
+cd couch-context
 ./scripts/bootstrap_macos.sh
 ```
 
 **Linux:**
 ```bash
+git clone https://github.com/cserp440/couch-context.git
+cd couch-context
 ./scripts/bootstrap_linux.sh
 ```
 
