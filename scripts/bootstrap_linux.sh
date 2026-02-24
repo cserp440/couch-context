@@ -65,27 +65,39 @@ else
   exit 1
 fi
 
-# Step 2: Ensure pip is available and upgraded
-echo "[2/11] Ensuring pip is available..."
-$PYTHON_BIN -m pip install --upgrade pip --quiet || {
-  echo "pip not available. Installing..."
-  PKG_MANAGER=$(detect_package_manager)
-  case "$PKG_MANAGER" in
-    apt)
-      sudo apt-get install -y python3-pip
-      ;;
-    yum|dnf)
-      sudo yum install -y python3-pip || sudo dnf install -y python3-pip
-      ;;
-    pacman)
-      sudo pacman -S --noconfirm python-pip
-      ;;
-    zypper)
-      sudo zypper install -y python3-pip
-      ;;
-  esac
-}
-$PYTHON_BIN -m pip install --upgrade pip --quiet
+# Step 2: Create and activate virtual environment
+echo "[2/11] Setting up Python virtual environment ..."
+if [[ ! -d .venv ]]; then
+  echo "Creating virtual environment at .venv ..."
+  $PYTHON_BIN -m venv .venv || {
+    echo "Failed to create venv. Installing python3-venv..."
+    PKG_MANAGER=$(detect_package_manager)
+    case "$PKG_MANAGER" in
+      apt)
+        sudo apt-get install -y python3-venv
+        ;;
+      yum|dnf)
+        sudo yum install -y python3-venv || sudo dnf install -y python3-venv
+        ;;
+      pacman)
+        echo "venv should be included with Python on Arch. Ensure python is installed."
+        ;;
+      zypper)
+        sudo zypper install -y python3-venv
+        ;;
+    esac
+    $PYTHON_BIN -m venv .venv
+  }
+else
+  echo "Virtual environment already exists."
+fi
+
+# Activate venv and use its Python for all subsequent commands
+PYTHON_BIN="$ROOT_DIR/.venv/bin/python"
+PIP_BIN="$ROOT_DIR/.venv/bin/pip"
+
+echo "Upgrading pip in virtual environment ..."
+$PIP_BIN install --upgrade pip --quiet
 
 # Step 3: Check Docker and install if needed
 echo "[3/11] Checking Docker..."
@@ -136,7 +148,7 @@ if [[ ! -f pyproject.toml ]]; then
   echo "Error: pyproject.toml not found. Are you in the correct directory?"
   exit 1
 fi
-$PYTHON_BIN -m pip install -e . --quiet
+$PIP_BIN install -e . --quiet
 
 # Step 6: Create .env if needed
 if [[ ! -f .env ]]; then

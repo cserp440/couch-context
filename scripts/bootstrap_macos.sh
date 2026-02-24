@@ -64,9 +64,21 @@ else
   exit 1
 fi
 
-# Step 3: Install Python pip and upgrade
-echo "[3/11] Ensuring pip is up to date ..."
-$PYTHON_BIN -m pip install --upgrade pip --quiet
+# Step 3: Create and activate virtual environment
+echo "[3/11] Setting up Python virtual environment ..."
+if [[ ! -d .venv ]]; then
+  echo "Creating virtual environment at .venv ..."
+  $PYTHON_BIN -m venv .venv
+else
+  echo "Virtual environment already exists."
+fi
+
+# Activate venv and use its Python for all subsequent commands
+PYTHON_BIN="$ROOT_DIR/.venv/bin/python"
+PIP_BIN="$ROOT_DIR/.venv/bin/pip"
+
+echo "Upgrading pip in virtual environment ..."
+$PIP_BIN install --upgrade pip --quiet
 
 # Step 4: Install Docker Desktop if needed
 echo "[4/11] Checking Docker ..."
@@ -85,7 +97,7 @@ if [[ ! -f pyproject.toml ]]; then
   echo "Error: pyproject.toml not found. Are you in the correct directory?"
   exit 1
 fi
-$PYTHON_BIN -m pip install -e . --quiet
+$PIP_BIN install -e . --quiet
 
 # Step 6: Create .env if needed
 if [[ ! -f .env ]]; then
