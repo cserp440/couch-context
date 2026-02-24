@@ -62,7 +62,7 @@ def test_install_ide_configs_writes_project_files(tmp_path: Path, monkeypatch):
     )
 
     assert len(results) == 4
-    factory_file = fake_home / ".factory" / "settings.json"
+    factory_file = fake_home / ".factory" / "mcp.json"
     vscode_file = tmp_path / ".vscode" / "mcp.json"
     claude_file = fake_home / ".claude" / "settings.json"
     codex_file = fake_home / ".codex" / "config.toml"
@@ -70,6 +70,10 @@ def test_install_ide_configs_writes_project_files(tmp_path: Path, monkeypatch):
     assert vscode_file.exists()
     assert claude_file.exists()
     assert codex_file.exists()
+
+    factory_content = factory_file.read_text(encoding="utf-8")
+    assert '"type": "stdio"' in factory_content
+    assert '"disabled": false' in factory_content
 
     codex_content = codex_file.read_text(encoding="utf-8")
     assert "[mcp_servers.coding-memory]" in codex_content

@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     auto_import_claude_path: str = Field(default_factory=lambda: str(Path.home() / ".claude/projects"))
     auto_import_codex_on_start: bool = Field(default=True)
     auto_import_codex_path: str = Field(default_factory=lambda: str(Path.home() / ".codex"))
+    auto_import_factory_on_start: bool = Field(default=True)
+    auto_import_factory_path: str = Field(default_factory=lambda: str(Path.home() / ".factory" / "sessions"))
     auto_import_on_query: bool = Field(default=True)
     auto_import_min_interval_seconds: int = Field(default=45)
 

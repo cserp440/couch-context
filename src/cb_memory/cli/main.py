@@ -98,6 +98,7 @@ def _provision_schema(settings, bucket_ram: int) -> None:
 @click.option("--skip-claude", is_flag=True, help="Skip Claude chat import")
 @click.option("--skip-codex", is_flag=True, help="Skip Codex chat import")
 @click.option("--skip-opencode", is_flag=True, help="Skip OpenCode chat import")
+@click.option("--skip-factory", is_flag=True, help="Skip Factory chat import")
 @click.option("--backfill-embeddings", is_flag=True, help="Backfill embeddings after import")
 @click.option("--project-id", default=None, help="Override project ID for imported data")
 def init_cmd(
@@ -106,6 +107,7 @@ def init_cmd(
     skip_claude: bool,
     skip_codex: bool,
     skip_opencode: bool,
+    skip_factory: bool,
     backfill_embeddings: bool,
     project_id: str | None,
 ) -> None:
@@ -116,6 +118,7 @@ def init_cmd(
         skip_claude=skip_claude,
         skip_codex=skip_codex,
         skip_opencode=skip_opencode,
+        skip_factory=skip_factory,
         backfill_embeddings=backfill_embeddings,
         project_id=project_id,
     )
@@ -128,6 +131,7 @@ def _run_init(
     skip_claude: bool,
     skip_codex: bool,
     skip_opencode: bool,
+    skip_factory: bool,
     backfill_embeddings: bool,
     project_id: str | None,
 ) -> None:
@@ -158,6 +162,11 @@ def _run_init(
             from cb_memory.importers.opencode import OpenCodeImporter
 
             import_stats["opencode"] = OpenCodeImporter(db, settings, sync_project_id).run(path=None)
+        if not skip_factory:
+            from cb_memory.importers.factory import FactoryImporter
+
+            factory_path = str(Path(settings.auto_import_factory_path).expanduser())
+            import_stats["factory"] = FactoryImporter(db, settings, sync_project_id).run(path=factory_path)
 
         if backfill_embeddings:
             click.echo("Step 3.5/4: Backfilling embeddings ...")
@@ -191,6 +200,7 @@ def _run_init(
 @click.option("--skip-claude", is_flag=True, help="Skip Claude chat import")
 @click.option("--skip-codex", is_flag=True, help="Skip Codex chat import")
 @click.option("--skip-opencode", is_flag=True, help="Skip OpenCode chat import")
+@click.option("--skip-factory", is_flag=True, help="Skip Factory chat import")
 @click.option("--backfill-embeddings", is_flag=True, help="Backfill embeddings after import")
 @click.option("--project-id", default=None, help="Override project ID for imported data")
 def replicate_cmd(
@@ -204,6 +214,7 @@ def replicate_cmd(
     skip_claude: bool,
     skip_codex: bool,
     skip_opencode: bool,
+    skip_factory: bool,
     backfill_embeddings: bool,
     project_id: str | None,
 ) -> None:
@@ -223,6 +234,7 @@ def replicate_cmd(
         skip_claude=skip_claude,
         skip_codex=skip_codex,
         skip_opencode=skip_opencode,
+        skip_factory=skip_factory,
         backfill_embeddings=backfill_embeddings,
         project_id=project_id,
     )
@@ -289,18 +301,29 @@ def install_cmd(
         password = click.prompt("Couchbase password", default=password, hide_input=True)
         bucket = click.prompt("Couchbase bucket", default=bucket)
         workspace = click.prompt("Project id / workspace path", default=workspace)
-        current_openai = openai_key_value or ""
-        openai_key_value = (
-            click.prompt(
-                "OpenAI API key (optional, leave blank to use Ollama)",
-                default=current_openai,
-                show_default=False,
-            ).strip()
-            or None
+        
+        # Ollama is the default embedding provider
+        ollama_host_value = click.prompt("Ollama host", default=ollama_host_value)
+        ollama_model_value = click.prompt("Ollama embedding model", default=ollama_model_value)
+        
+        # Optionally offer OpenAI as alternative
+        use_openai = click.confirm(
+            "Use OpenAI embeddings instead of Ollama? (OpenAI API key required)",
+            default=False,
+            show_default=True
         )
-        if not openai_key_value:
-            ollama_host_value = click.prompt("Ollama host", default=ollama_host_value)
-            ollama_model_value = click.prompt("Ollama embedding model", default=ollama_model_value)
+        if use_openai:
+            current_openai = openai_key_value or ""
+            openai_key_value = (
+                click.prompt(
+                    "OpenAI API key",
+                    default=current_openai,
+                    show_default=False,
+                ).strip()
+                or None
+            )
+        else:
+            openai_key_value = None
 
     server_env = build_server_env(
         cb_connection_string=connection,

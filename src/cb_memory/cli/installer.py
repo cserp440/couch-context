@@ -82,6 +82,8 @@ def build_server_env(
         "AUTO_IMPORT_CLAUDE_PATH": str(Path.home() / ".claude/projects"),
         "AUTO_IMPORT_CODEX_ON_START": "true",
         "AUTO_IMPORT_CODEX_PATH": str(Path.home() / ".codex"),
+        "AUTO_IMPORT_FACTORY_ON_START": "true",
+        "AUTO_IMPORT_FACTORY_PATH": str(Path.home() / ".factory" / "sessions"),
         "OLLAMA_HOST": ollama_host,
         "OLLAMA_EMBEDDING_MODEL": ollama_embedding_model,
     }
@@ -129,13 +131,15 @@ def install_ide_configs(
 
 def _config_payload_for_ide(ide_id: str, project_root: Path, env: dict[str, str]) -> tuple[Path, dict]:
     if ide_id == "factory":
-        path = Path.home() / ".factory" / "settings.json"
+        path = Path.home() / ".factory" / "mcp.json"
         return path, {
             "container_key": "mcpServers",
             "server": {
+                "type": "stdio",
                 "command": "python",
                 "args": ["-m", "cb_memory.server"],
                 "env": env,
+                "disabled": False,
             },
         }
 
