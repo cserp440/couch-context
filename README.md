@@ -65,13 +65,6 @@ cd couch-context
 ./scripts/bootstrap_macos.sh
 ```
 
-**Linux:**
-```bash
-git clone https://github.com/cserp440/couch-context.git
-cd couch-context
-./scripts/bootstrap_linux.sh
-```
-
 The script will:
 - Install Python 3.10+ and Ollama if needed
 - Start Couchbase via Docker and provision the database
