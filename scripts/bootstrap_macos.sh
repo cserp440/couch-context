@@ -9,7 +9,7 @@ wait_for_url() {
   local timeout_seconds="$2"
   local start
   start="$(date +%s)"
-  while ! curl -sf "$url" > /dev/null; do
+  while ! curl -s "$url" > /dev/null; do
     if (( $(date +%s) - start >= timeout_seconds )); then
       return 1
     fi
@@ -19,6 +19,39 @@ wait_for_url() {
 
 check_command() {
   command -v "$1" >/dev/null 2>&1
+}
+
+ensure_factory_mcp_uses_venv_python() {
+  local mcp_config="$HOME/.factory/mcp.json"
+
+  if [[ ! -f "$mcp_config" ]]; then
+    echo "Factory MCP config not found at $mcp_config (skipping patch)."
+    return 0
+  fi
+
+  "$PYTHON_BIN" - "$mcp_config" "$PYTHON_BIN" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+config_path = Path(sys.argv[1])
+venv_python = sys.argv[2]
+
+data = json.loads(config_path.read_text())
+server = data.get("mcpServers", {}).get("coding-memory")
+if not isinstance(server, dict):
+    print("Factory MCP entry 'coding-memory' not found (skipping patch).")
+    sys.exit(0)
+
+old_command = server.get("command")
+server["command"] = venv_python
+config_path.write_text(json.dumps(data, indent=2) + "\n")
+
+if old_command == venv_python:
+    print("Factory MCP already uses virtualenv Python.")
+else:
+    print(f"Factory MCP command updated: {old_command} -> {venv_python}")
+PY
 }
 
 echo "=========================================="
@@ -109,7 +142,8 @@ fi
 
 # Step 7: Ensure Couchbase is running via Docker
 echo "[7/11] Ensuring Couchbase is reachable ..."
-if ! curl -sf "http://127.0.0.1:8091/pools" > /dev/null; then
+CB_NEEDS_INIT=false
+if ! curl -s "http://127.0.0.1:8091/pools" > /dev/null; then
   echo "Couchbase not reachable. Starting Couchbase via Docker..."
   docker rm -f cb >/dev/null 2>&1 || true
   docker run -d \
@@ -125,9 +159,56 @@ if ! curl -sf "http://127.0.0.1:8091/pools" > /dev/null; then
     echo "Check logs: docker logs cb"
     exit 1
   fi
+  CB_NEEDS_INIT=true
   echo "Couchbase is ready."
 else
-  echo "Couchbase OK."
+  echo "Couchbase is reachable."
+fi
+
+# Check if Couchbase needs initialization
+CB_DEFAULT_STATUS="$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:8091/pools/default" || true)"
+if [[ "$CB_DEFAULT_STATUS" == "200" || "$CB_DEFAULT_STATUS" == "401" ]]; then
+  echo "Couchbase already initialized."
+else
+  echo "Initializing Couchbase cluster..."
+  CB_NEEDS_INIT=true
+fi
+
+if [ "$CB_NEEDS_INIT" = true ]; then
+  echo "Setting up Couchbase with admin credentials..."
+  
+  # Step 1: Set up services and memory quotas
+  curl -sf -X POST http://127.0.0.1:8091/node/controller/setupServices \
+    -d services=kv,n1ql,index,fts || {
+    echo "Failed to setup services"
+    exit 1
+  }
+  
+  # Step 2: Set up admin credentials
+  curl -sf -X POST http://127.0.0.1:8091/settings/web \
+    -d username=Administrator \
+    -d password=password \
+    -d port=8091 || {
+    echo "Failed to set admin credentials"
+    exit 1
+  }
+  
+  # Step 3: Set memory quotas
+  curl -sf -X POST http://127.0.0.1:8091/pools/default \
+    -u Administrator:password \
+    -d memoryQuota=512 \
+    -d indexMemoryQuota=256 \
+    -d ftsMemoryQuota=256 || {
+    echo "Failed to set memory quotas"
+    exit 1
+  }
+  
+  # Step 4: Accept terms and conditions
+  curl -sf -X POST http://127.0.0.1:8091/settings/stats \
+    -u Administrator:password \
+    -d sendStats=false || true
+  
+  echo "Couchbase cluster initialized successfully."
 fi
 
 # Step 8: Install Ollama via Homebrew if not present
@@ -175,6 +256,9 @@ $PYTHON_BIN -m cb_memory.cli.main install \
   --ollama-embedding-model nomic-embed-text \
   --write-env \
   --bootstrap
+
+echo "Ensuring Factory MCP uses the virtual environment Python ..."
+ensure_factory_mcp_uses_venv_python
 
 echo ""
 echo "=========================================="
