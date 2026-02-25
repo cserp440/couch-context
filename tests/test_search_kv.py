@@ -55,8 +55,10 @@ def test_kv_grep_uses_non_conflicting_any_variable_for_thoughts():
     assert "ANY t IN $terms" not in thoughts_query
 
     messages_query = next(q for q in db.cluster.queries if ".conversations.messages" in q)
-    assert "TOSTRING(m.tool_calls)" in messages_query
-    assert "TOSTRING(m.tool_results)" in messages_query
+    assert "m.text_content" in messages_query
+    assert "m.*" not in messages_query
+    assert "TOSTRING(m.tool_calls)" not in messages_query
+    assert "TOSTRING(m.tool_results)" not in messages_query
 
 
 def test_kv_grep_assigns_high_score_to_exact_keyword_hits():
@@ -73,3 +75,5 @@ def test_kv_grep_assigns_high_score_to_exact_keyword_hits():
     assert row["source"] == "kv"
     assert row["score"] >= 11.0
     assert "matrix_lr_update_mode=legacy" in row["_matched_terms"]
+    assert "tool_results" not in row
+    assert row["text"].startswith("matrix_lr_update_mode=legacy")

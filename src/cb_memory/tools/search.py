@@ -64,6 +64,23 @@ def _doc_matches_projects(doc: dict, project_ids: list[str]) -> bool:
     return False
 
 
+def _extract_text(doc: dict) -> str:
+    for key in (
+        "text_content",
+        "description",
+        "content",
+        "context",
+        "root_cause",
+        "fix_description",
+        "code_example",
+        "title",
+    ):
+        value = doc.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
 async def memory_search(
     db: CouchbaseClient,
     provider: EmbeddingProvider,
@@ -73,6 +90,7 @@ async def memory_search(
     include_all_projects: bool | None = None,
     limit: int = 10,
     collections: list[str] | None = None,
+    include_full_doc: bool = False,
 ) -> dict:
     """Semantic search across all memory — vector search + FTS.
 
@@ -107,14 +125,20 @@ async def memory_search(
 
     # 1. Vector search across knowledge + summaries
     try:
-        vector_results = _vector_search(db, query_embedding, limit, collections)
+        vector_results = _vector_search(
+            db,
+            query_embedding,
+            limit,
+            collections,
+            include_full_doc=include_full_doc,
+        )
         results.extend(vector_results)
     except Exception as e:
         logger.warning(f"Vector search failed: {e}")
 
     # 2. FTS text search on messages and sessions
     try:
-        fts_results = _fts_search(db, query, limit)
+        fts_results = _fts_search(db, query, limit, include_full_doc=include_full_doc)
         results.extend(fts_results)
     except Exception as e:
         logger.warning(f"FTS search failed: {e}")
@@ -226,13 +250,12 @@ def _kv_grep(
 
     # Messages (filter project via parent session for backward compatibility)
     q = (
-        f"SELECT META(m).id as id, m.*, s.source AS session_source, "
+        f"SELECT META(m).id as id, m.text_content, m.role, m.project_id, m.session_id, m.timestamp, "
+        f"s.source AS session_source, "
         f"s.project_id AS session_project_id, s.directory AS session_directory "
         f"FROM `{bucket}`.conversations.messages m "
         f"JOIN `{bucket}`.conversations.sessions s ON KEYS m.session_id "
-        f"WHERE ({_like_clause('m.text_content')} "
-        f"OR {_like_clause('TOSTRING(m.tool_calls)')} "
-        f"OR {_like_clause('TOSTRING(m.tool_results)')}) "
+        f"WHERE ({_like_clause('m.text_content')}) "
     )
     if project_ids is not None:
         q += f"AND {_session_project_match_expression_many('s')} "
@@ -245,9 +268,9 @@ def _kv_grep(
 
     # Sessions
     q = (
-        f"SELECT META(s).id as id, s.* "
+        f"SELECT META(s).id as id, s.title, s.project_id, s.directory, s.source, s.created_at "
         f"FROM `{bucket}`.conversations.sessions s "
-        f"WHERE ({_like_clause('s.title')} OR {_like_clause('s.summary')}) "
+        f"WHERE ({_like_clause('s.title')}) "
     )
     if project_ids is not None:
         q += f"AND {_session_project_match_expression_many('s')} "
@@ -260,7 +283,7 @@ def _kv_grep(
 
     # Knowledge: decisions
     q = (
-        f"SELECT META(d).id as id, d.* "
+        f"SELECT META(d).id as id, d.title, d.description, d.context, d.project_id, d.created_at "
         f"FROM `{bucket}`.knowledge.decisions d "
         f"WHERE ({_like_clause('d.title')} OR {_like_clause('d.description')} OR {_like_clause('d.context')}) "
     )
@@ -275,7 +298,7 @@ def _kv_grep(
 
     # Knowledge: bugs
     q = (
-        f"SELECT META(b).id as id, b.* "
+        f"SELECT META(b).id as id, b.title, b.description, b.root_cause, b.fix_description, b.project_id, b.created_at "
         f"FROM `{bucket}`.knowledge.bugs b "
         f"WHERE ({_like_clause('b.title')} OR {_like_clause('b.description')} OR {_like_clause('b.root_cause')} OR {_like_clause('b.fix_description')}) "
     )
@@ -290,7 +313,7 @@ def _kv_grep(
 
     # Knowledge: patterns
     q = (
-        f"SELECT META(p).id as id, p.* "
+        f"SELECT META(p).id as id, p.title, p.description, p.code_example, p.project_id, p.created_at "
         f"FROM `{bucket}`.knowledge.patterns p "
         f"WHERE ({_like_clause('p.title')} OR {_like_clause('p.description')} OR {_like_clause('p.code_example')}) "
     )
@@ -305,7 +328,7 @@ def _kv_grep(
 
     # Knowledge: thoughts
     q = (
-        f"SELECT META(t).id as id, t.* "
+        f"SELECT META(t).id as id, t.content, t.category, t.project_id, t.created_at "
         f"FROM `{bucket}`.knowledge.thoughts t "
         f"WHERE ({_like_clause('t.content')}) "
     )
@@ -330,10 +353,12 @@ def _annotate_kv_rows(
     out: list[dict] = []
     for row in rows:
         row.pop("embedding", None)
+        row.pop("tool_results", None)
         matched_terms = _matched_terms(row, terms)
         # Keep exact keyword hits ahead of semantic-only matches.
         row["score"] = 10.0 + float(len(matched_terms))
         row["source"] = "kv"
+        row["text"] = _extract_text(row)
         row["_matched_terms"] = matched_terms
         row["_scope"] = scope
         row["_collection"] = collection
@@ -349,15 +374,12 @@ def _matched_terms(row: dict, terms: list[str]) -> list[str]:
     fields = [
         row.get("text_content"),
         row.get("title"),
-        row.get("summary"),
         row.get("description"),
         row.get("context"),
         row.get("root_cause"),
         row.get("fix_description"),
         row.get("code_example"),
         row.get("content"),
-        row.get("tool_calls"),
-        row.get("tool_results"),
     ]
     haystack = " ".join(str(v) for v in fields if v is not None).lower()
     if not haystack:
@@ -382,6 +404,7 @@ def _vector_search(
     embedding: list[float],
     limit: int,
     collections: list[str] | None,
+    include_full_doc: bool = False,
 ) -> list[dict]:
     """Run vector search against available FTS indexes."""
     vq = VectorQuery("embedding", embedding, num_candidates=limit * 3)
@@ -394,7 +417,6 @@ def _vector_search(
                 req,
                 SearchOptions(
                     limit=limit,
-                    fields=["*"],
                     vector_search=VectorSearch([vq]),
                 ),
             )
@@ -406,19 +428,25 @@ def _vector_search(
             doc = {
                 "id": row.id,
                 "score": row.score,
-                "fields": row.fields if hasattr(row, "fields") else {},
                 "source": f"vector:{index_name}",
             }
-            # Try to fetch the full document
-            full_doc = _fetch_document(db, row.id)
-            if full_doc:
-                doc.update(full_doc)
+            projected, full_doc = _fetch_document_text_only(db, row.id)
+            if projected:
+                doc.update(projected)
+            doc["text"] = _extract_text(projected or {})
+            if include_full_doc and full_doc:
+                doc["_full_doc"] = full_doc
             results.append(doc)
 
     return results
 
 
-def _fts_search(db: CouchbaseClient, query_text: str, limit: int) -> list[dict]:
+def _fts_search(
+    db: CouchbaseClient,
+    query_text: str,
+    limit: int,
+    include_full_doc: bool = False,
+) -> list[dict]:
     """Run full-text search across available FTS indexes."""
     match_query = search.MatchQuery(query_text)
     req = search.SearchRequest.create(match_query)
@@ -429,7 +457,7 @@ def _fts_search(db: CouchbaseClient, query_text: str, limit: int) -> list[dict]:
             result = db.cluster.search(
                 index_name,
                 req,
-                SearchOptions(limit=limit, fields=["*"]),
+                SearchOptions(limit=limit),
             )
         except Exception as e:
             logger.warning(f"FTS search error on {index_name}: {e}")
@@ -440,18 +468,20 @@ def _fts_search(db: CouchbaseClient, query_text: str, limit: int) -> list[dict]:
                 "id": row.id,
                 "score": row.score,
                 "source": f"fts:{index_name}",
-                "fields": row.fields if hasattr(row, "fields") else {},
             }
-            full_doc = _fetch_document(db, row.id)
-            if full_doc:
-                doc.update(full_doc)
+            projected, full_doc = _fetch_document_text_only(db, row.id)
+            if projected:
+                doc.update(projected)
+            doc["text"] = _extract_text(projected or {})
+            if include_full_doc and full_doc:
+                doc["_full_doc"] = full_doc
             results.append(doc)
 
     return results
 
 
-def _fetch_document(db: CouchbaseClient, doc_id: str) -> dict | None:
-    """Attempt to fetch a document by ID from the appropriate collection."""
+def _fetch_document_text_only(db: CouchbaseClient, doc_id: str) -> tuple[dict | None, dict | None]:
+    """Fetch text-first projection directly from Couchbase, with optional full doc fallback."""
     # Determine collection from doc ID prefix
     prefix_map = {
         "session::": ("conversations", "sessions"),
@@ -468,23 +498,67 @@ def _fetch_document(db: CouchbaseClient, doc_id: str) -> dict | None:
             try:
                 result = db.collection(scope, coll).get(doc_id)
                 data = result.content_as[dict]
-                # Remove embedding from response to save tokens
                 data.pop("embedding", None)
+                data.pop("tool_results", None)
+
+                projected: dict = {
+                    "_scope": scope,
+                    "_collection": coll,
+                }
+
                 if scope == "conversations" and coll == "messages":
+                    projected.update(
+                        {
+                            "session_id": data.get("session_id"),
+                            "project_id": data.get("project_id"),
+                            "role": data.get("role"),
+                            "timestamp": data.get("timestamp"),
+                            "text_content": data.get("text_content", ""),
+                        }
+                    )
                     session_id = data.get("session_id")
                     if session_id:
                         try:
                             sres = db.sessions.get(session_id)
                             sdoc = sres.content_as[dict]
-                            data["session_source"] = sdoc.get("source")
-                            data["session_project_id"] = sdoc.get("project_id")
-                            data["session_directory"] = sdoc.get("directory")
+                            projected["session_source"] = sdoc.get("source")
+                            projected["session_project_id"] = sdoc.get("project_id")
+                            projected["session_directory"] = sdoc.get("directory")
                         except Exception:
                             pass
-                data["_scope"] = scope
-                data["_collection"] = coll
-                return data
-            except Exception:
-                return None
+                elif scope == "conversations" and coll == "sessions":
+                    projected.update(
+                        {
+                            "project_id": data.get("project_id"),
+                            "directory": data.get("directory"),
+                            "session_source": data.get("source"),
+                            "title": data.get("title", ""),
+                        }
+                    )
+                elif scope == "conversations" and coll == "summaries":
+                    projected.update(
+                        {
+                            "project_id": data.get("project_id"),
+                            "session_id": data.get("session_id"),
+                            "text_content": data.get("summary", ""),
+                        }
+                    )
+                else:
+                    projected.update(
+                        {
+                            "project_id": data.get("project_id"),
+                            "title": data.get("title", ""),
+                            "description": data.get("description", ""),
+                            "context": data.get("context", ""),
+                            "root_cause": data.get("root_cause", ""),
+                            "fix_description": data.get("fix_description", ""),
+                            "code_example": data.get("code_example", ""),
+                            "content": data.get("content", ""),
+                        }
+                    )
 
-    return None
+                return projected, data
+            except Exception:
+                return None, None
+
+    return None, None
