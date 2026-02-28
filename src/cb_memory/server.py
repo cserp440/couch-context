@@ -29,6 +29,7 @@ app = Server("cb-memory")
 
 QUERY_TOOLS = {
     "memory_search",
+    "memory_kv_text_search",
     "memory_kv_semantic_search",
     "memory_recall_decision",
     "memory_recall_bug",
@@ -69,6 +70,29 @@ TOOLS = [
                 },
             },
             "required": ["query"],
+        },
+    ),
+    Tool(
+        name="memory_kv_text_search",
+        description="Keyword (KV/grep-style) search across memory returning text + tool calls only (excludes tool results)",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "terms": {"type": "array", "items": {"type": "string"}, "description": "Keyword terms"},
+                "project_id": {"type": "string", "description": "Filter by project (optional)"},
+                "related_project_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional additional project IDs for cross-project retrieval",
+                },
+                "include_all_projects": {
+                    "type": "boolean",
+                    "description": "If true, search globally across all projects (if omitted, server env defaults may apply)",
+                },
+                "limit": {"type": "integer", "description": "Max results", "default": 20},
+                "per_collection_limit": {"type": "integer", "description": "Max per collection", "default": 10},
+            },
+            "required": ["terms"],
         },
     ),
     Tool(
@@ -339,6 +363,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         # Search & Recall
         if name == "memory_search":
             result = await search.memory_search(db, provider, **arguments)
+        elif name == "memory_kv_text_search":
+            result = await search.memory_kv_text_search(db, provider, **arguments)
         elif name == "memory_kv_semantic_search":
             result = await search.memory_kv_semantic_search(db, provider, **arguments)
         elif name == "memory_recall_decision":

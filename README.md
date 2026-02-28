@@ -1,4 +1,5 @@
 
+
 # cb-memory: Coding Memory System
 
 A coding memory system powered by Couchbase that stores all past AI coding conversations, decisions, bug fixes, thoughts, and patterns — then exposes retrieval tools via MCP so any AI coding assistant can search and learn from past sessions.

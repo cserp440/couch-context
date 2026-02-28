@@ -168,6 +168,35 @@ async def memory_search(
     }
 
 
+async def memory_kv_text_search(
+    db: CouchbaseClient,
+    provider: EmbeddingProvider,
+    terms: list[str],
+    project_id: str | None = None,
+    related_project_ids: list[str] | None = None,
+    include_all_projects: bool | None = None,
+    limit: int = 20,
+    per_collection_limit: int = 10,
+    include_metadata: bool = False,
+) -> dict:
+    """Keyword (KV) grep-style search + semantic search merge (text-only results).
+
+    Returns text-focused fields and tool calls, excluding tool results/full-doc payloads.
+    """
+    return await _memory_kv_semantic_search_impl(
+        db=db,
+        provider=provider,
+        terms=terms,
+        project_id=project_id,
+        related_project_ids=related_project_ids,
+        include_all_projects=include_all_projects,
+        limit=limit,
+        per_collection_limit=per_collection_limit,
+        text_only=True,
+        include_metadata=include_metadata,
+    )
+
+
 async def memory_kv_semantic_search(
     db: CouchbaseClient,
     provider: EmbeddingProvider,
@@ -188,6 +217,31 @@ async def memory_kv_semantic_search(
         limit: Max results to return after merging.
         per_collection_limit: Max results per collection in KV phase.
     """
+    return await _memory_kv_semantic_search_impl(
+        db=db,
+        provider=provider,
+        terms=terms,
+        project_id=project_id,
+        related_project_ids=related_project_ids,
+        include_all_projects=include_all_projects,
+        limit=limit,
+        per_collection_limit=per_collection_limit,
+        text_only=False,
+    )
+
+
+async def _memory_kv_semantic_search_impl(
+    db: CouchbaseClient,
+    provider: EmbeddingProvider,
+    terms: list[str],
+    project_id: str | None,
+    related_project_ids: list[str] | None,
+    include_all_projects: bool | None,
+    limit: int,
+    per_collection_limit: int,
+    text_only: bool,
+    include_metadata: bool = False,
+) -> dict:
     cleaned_terms = [t.strip() for t in terms if t and t.strip()]
     if not cleaned_terms:
         return {"error": "No valid terms provided", "results": []}
@@ -207,7 +261,13 @@ async def memory_kv_semantic_search(
         include_all_projects=effective_include_all_projects,
     )
 
-    kv_results = _kv_grep(db, cleaned_terms, scope_project_ids, per_collection_limit)
+    kv_results = _kv_grep(
+        db,
+        cleaned_terms,
+        scope_project_ids,
+        per_collection_limit,
+        text_only=text_only,
+    )
 
     # Semantic search using the concatenated terms
     semantic = await memory_search(
@@ -221,8 +281,19 @@ async def memory_kv_semantic_search(
         collections=None,
     )
 
-    merged = kv_results + list(semantic.get("results", []))
+    semantic_results = list(semantic.get("results", []))
+
+    merged = kv_results + semantic_results
     merged = _dedupe_results(merged)
+    if text_only:
+        merged = [_project_text_only_result(row, include_metadata=include_metadata) for row in merged]
+
+    if text_only:
+        return {
+            "terms": cleaned_terms,
+            "project_id": effective_project_id,
+            "results": merged[:limit],
+        }
 
     return {
         "terms": cleaned_terms,
@@ -239,6 +310,7 @@ def _kv_grep(
     terms: list[str],
     project_ids: list[str] | None,
     per_collection_limit: int,
+    text_only: bool = False,
 ) -> list[dict]:
     """Run grep-style LIKE searches across key collections."""
     bucket = db._settings.cb_bucket
@@ -250,7 +322,7 @@ def _kv_grep(
 
     # Messages (filter project via parent session for backward compatibility)
     q = (
-        f"SELECT META(m).id as id, m.text_content, m.role, m.project_id, m.session_id, m.timestamp, "
+        f"SELECT META(m).id as id, m.text_content, m.`role` AS `role`, m.project_id, m.session_id, m.timestamp, m.tool_calls, "
         f"s.source AS session_source, "
         f"s.project_id AS session_project_id, s.directory AS session_directory "
         f"FROM `{bucket}`.conversations.messages m "
@@ -262,7 +334,7 @@ def _kv_grep(
     q += f"LIMIT {int(per_collection_limit)}"
     try:
         rows = list(db.cluster.query(q, terms=terms, project_ids=project_ids))
-        results.extend(_annotate_kv_rows(rows, terms, "conversations", "messages"))
+        results.extend(_annotate_kv_rows(rows, terms, "conversations", "messages", text_only=text_only))
     except Exception as e:
         logger.warning(f"KV search messages failed: {e}")
 
@@ -277,7 +349,7 @@ def _kv_grep(
     q += f"LIMIT {int(per_collection_limit)}"
     try:
         rows = list(db.cluster.query(q, terms=terms, project_ids=project_ids))
-        results.extend(_annotate_kv_rows(rows, terms, "conversations", "sessions"))
+        results.extend(_annotate_kv_rows(rows, terms, "conversations", "sessions", text_only=text_only))
     except Exception as e:
         logger.warning(f"KV search sessions failed: {e}")
 
@@ -292,7 +364,7 @@ def _kv_grep(
     q += f"LIMIT {int(per_collection_limit)}"
     try:
         rows = list(db.cluster.query(q, terms=terms, project_ids=project_ids))
-        results.extend(_annotate_kv_rows(rows, terms, "knowledge", "decisions"))
+        results.extend(_annotate_kv_rows(rows, terms, "knowledge", "decisions", text_only=text_only))
     except Exception as e:
         logger.warning(f"KV search decisions failed: {e}")
 
@@ -307,7 +379,7 @@ def _kv_grep(
     q += f"LIMIT {int(per_collection_limit)}"
     try:
         rows = list(db.cluster.query(q, terms=terms, project_ids=project_ids))
-        results.extend(_annotate_kv_rows(rows, terms, "knowledge", "bugs"))
+        results.extend(_annotate_kv_rows(rows, terms, "knowledge", "bugs", text_only=text_only))
     except Exception as e:
         logger.warning(f"KV search bugs failed: {e}")
 
@@ -322,7 +394,7 @@ def _kv_grep(
     q += f"LIMIT {int(per_collection_limit)}"
     try:
         rows = list(db.cluster.query(q, terms=terms, project_ids=project_ids))
-        results.extend(_annotate_kv_rows(rows, terms, "knowledge", "patterns"))
+        results.extend(_annotate_kv_rows(rows, terms, "knowledge", "patterns", text_only=text_only))
     except Exception as e:
         logger.warning(f"KV search patterns failed: {e}")
 
@@ -337,7 +409,7 @@ def _kv_grep(
     q += f"LIMIT {int(per_collection_limit)}"
     try:
         rows = list(db.cluster.query(q, terms=terms, project_ids=project_ids))
-        results.extend(_annotate_kv_rows(rows, terms, "knowledge", "thoughts"))
+        results.extend(_annotate_kv_rows(rows, terms, "knowledge", "thoughts", text_only=text_only))
     except Exception as e:
         logger.warning(f"KV search thoughts failed: {e}")
 
@@ -349,21 +421,76 @@ def _annotate_kv_rows(
     terms: list[str],
     scope: str,
     collection: str,
+    text_only: bool = False,
 ) -> list[dict]:
     out: list[dict] = []
     for row in rows:
+        row = dict(row)
         row.pop("embedding", None)
         row.pop("tool_results", None)
+        row.pop("raw_content", None)
         matched_terms = _matched_terms(row, terms)
         # Keep exact keyword hits ahead of semantic-only matches.
         row["score"] = 10.0 + float(len(matched_terms))
         row["source"] = "kv"
-        row["text"] = _extract_text(row)
+        if not text_only:
+            row["text"] = _extract_text(row)
         row["_matched_terms"] = matched_terms
         row["_scope"] = scope
         row["_collection"] = collection
         out.append(row)
     return out
+
+
+def _type_from_row(row: dict) -> str | None:
+    row_type = row.get("type")
+    if isinstance(row_type, str) and row_type:
+        return row_type
+
+    collection = row.get("_collection")
+    if collection == "messages":
+        return "message"
+    if collection == "sessions":
+        return "session"
+    if collection == "summaries":
+        return "summary"
+    if collection == "decisions":
+        return "decision"
+    if collection == "bugs":
+        return "bug"
+    if collection == "patterns":
+        return "pattern"
+    if collection == "thoughts":
+        return "thought"
+    return None
+
+
+def _project_text_only_result(row: dict, include_metadata: bool = False) -> dict:
+    text_content = str(row.get("text_content") or "")
+    if not text_content:
+        text_content = _extract_text(row)
+
+    tool_calls: list[dict] = []
+    for tc in row.get("tool_calls") or []:
+        if not isinstance(tc, dict):
+            continue
+        input_data = tc.get("input")
+        if not isinstance(input_data, dict):
+            continue
+        command = input_data.get("command")
+        if isinstance(command, str) and command.strip():
+            tool_calls.append({"command": command.strip()})
+
+    result: dict = {
+        "text_content": text_content,
+        "tool_calls": tool_calls,
+    }
+    if include_metadata:
+        result["id"] = row.get("id")
+        row_type = _type_from_row(row)
+        if row_type:
+            result["type"] = row_type
+    return result
 
 
 def _matched_terms(row: dict, terms: list[str]) -> list[str]:
@@ -514,6 +641,7 @@ def _fetch_document_text_only(db: CouchbaseClient, doc_id: str) -> tuple[dict | 
                             "role": data.get("role"),
                             "timestamp": data.get("timestamp"),
                             "text_content": data.get("text_content", ""),
+                            "tool_calls": data.get("tool_calls", []),
                         }
                     )
                     session_id = data.get("session_id")
