@@ -1028,7 +1028,7 @@ async def memory_context_for_request(
         try:
             terms = _extract_query_terms(query)
             if terms:
-                kv_sem = await search.memory_kv_semantic_search(
+                kv_sem = await search.memory_kv_text_search(
                     db=db,
                     provider=provider,
                     terms=terms,
@@ -1037,6 +1037,7 @@ async def memory_context_for_request(
                     include_all_projects=effective_include_all_projects,
                     limit=max(limit * 2, 12),
                     per_collection_limit=max(6, per_type_limit),
+                    include_metadata=True,
                 )
                 for r in kv_sem.get("results", []):
                     if "score" not in r:
